@@ -1,11 +1,19 @@
+import { useAuthStore } from "@/stores/authStore";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useRouter } from "expo-router";
-import { useAuthStore } from "@/stores/authStore";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -37,13 +45,17 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Logo area */}
         <View style={styles.logoArea}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoEmoji}>⛳</Text>
-          </View>
+          <Image
+            source={require("../../assets/images/golf-me-logo.png")}
+            style={styles.logo}
+            resizeMode="contain"
+          />
           <Text style={styles.appName}>GolfnMe</Text>
           <Text style={styles.tagline}>Track scores. Beat friends.</Text>
         </View>
@@ -78,10 +90,11 @@ export default function LoginScreen() {
             disabled={loading}
             activeOpacity={0.8}
           >
-            {loading
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.btnText}>Sign In</Text>
-            }
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnText}>Sign In</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -89,7 +102,8 @@ export default function LoginScreen() {
             onPress={() => router.push("/(auth)/signup")}
           >
             <Text style={styles.linkText}>
-              Don't have an account? <Text style={styles.linkBold}>Sign up</Text>
+              Don't have an account?{" "}
+              <Text style={styles.linkBold}>Sign up</Text>
             </Text>
           </TouchableOpacity>
         </View>
@@ -102,25 +116,41 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#1c1a15" },
   scroll: { flexGrow: 1, justifyContent: "center", padding: 24 },
 
+  logo: {
+    width: 100,
+    height: 100,
+    marginBottom: 16,
+  },
+
   logoArea: { alignItems: "center", marginBottom: 48 },
   logoCircle: {
-    width: 80, height: 80, borderRadius: 40,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: "#1d5a3c",
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 16,
   },
   logoEmoji: { fontSize: 36 },
-  appName: { fontSize: 32, fontWeight: "700", color: "#fff", letterSpacing: -0.5 },
+  appName: {
+    fontSize: 32,
+    fontWeight: "700",
+    color: "#fff",
+    letterSpacing: -0.5,
+  },
   tagline: { fontSize: 15, color: "#9ca3af", marginTop: 6 },
 
   form: { gap: 8 },
   label: { fontSize: 14, fontWeight: "500", color: "#d1d5db", marginTop: 8 },
   input: {
     backgroundColor: "#2a2822",
-    borderWidth: 1, borderColor: "#3f3c35",
+    borderWidth: 1,
+    borderColor: "#3f3c35",
     borderRadius: 12,
     padding: 14,
-    fontSize: 16, color: "#fff",
+    fontSize: 16,
+    color: "#fff",
     marginTop: 4,
   },
 

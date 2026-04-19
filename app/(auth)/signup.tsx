@@ -1,11 +1,19 @@
+import { API_BASE, setToken } from "@/lib/api";
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useRouter } from "expo-router";
-import { API_BASE, setToken } from "@/lib/api";
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -30,7 +38,12 @@ export default function SignupScreen() {
       const res = await fetch(`${API_BASE}/api/auth/mobile/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email: email.trim().toLowerCase(), username: username.trim().toLowerCase(), password }),
+        body: JSON.stringify({
+          name,
+          email: email.trim().toLowerCase(),
+          username: username.trim().toLowerCase(),
+          password,
+        }),
       });
 
       const data = await res.json();
@@ -46,21 +59,48 @@ export default function SignupScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.logoArea}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoEmoji}>⛳</Text>
-          </View>
-          <Text style={styles.appName}>Create Account</Text>
-          <Text style={styles.tagline}>Join GolfnMe and start tracking</Text>
+          <Image
+            source={require("../../assets/images/golf-me-logo.png")}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+          <Text style={styles.appName}>GolfnMe</Text>
+          <Text style={styles.tagline}>Track scores. Beat friends.</Text>
         </View>
 
         <View style={styles.form}>
           {[
-            { label: "Full Name", value: name, setter: setName, placeholder: "John Smith", autoCapitalize: "words" as const },
-            { label: "Email", value: email, setter: setEmail, placeholder: "you@example.com", keyboardType: "email-address" as const, autoCapitalize: "none" as const },
-            { label: "Username", value: username, setter: setUsername, placeholder: "johnsmith", autoCapitalize: "none" as const },
+            {
+              label: "Full Name",
+              value: name,
+              setter: setName,
+              placeholder: "John Smith",
+              autoCapitalize: "words" as const,
+            },
+            {
+              label: "Email",
+              value: email,
+              setter: setEmail,
+              placeholder: "you@example.com",
+              keyboardType: "email-address" as const,
+              autoCapitalize: "none" as const,
+            },
+            {
+              label: "Username",
+              value: username,
+              setter: setUsername,
+              placeholder: "johnsmith",
+              autoCapitalize: "none" as const,
+            },
           ].map((field) => (
             <View key={field.label}>
               <Text style={styles.label}>{field.label}</Text>
@@ -93,15 +133,20 @@ export default function SignupScreen() {
             disabled={loading}
             activeOpacity={0.8}
           >
-            {loading
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.btnText}>Create Account</Text>
-            }
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnText}>Create Account</Text>
+            )}
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.linkBtn} onPress={() => router.back()}>
+          <TouchableOpacity
+            style={styles.linkBtn}
+            onPress={() => router.back()}
+          >
             <Text style={styles.linkText}>
-              Already have an account? <Text style={styles.linkBold}>Sign in</Text>
+              Already have an account?{" "}
+              <Text style={styles.linkBold}>Sign in</Text>
             </Text>
           </TouchableOpacity>
         </View>
@@ -111,17 +156,50 @@ export default function SignupScreen() {
 }
 
 const styles = StyleSheet.create({
+  logo: {
+    width: 100,
+    height: 100,
+    marginBottom: 16,
+  },
   container: { flex: 1, backgroundColor: "#1c1a15" },
   scroll: { flexGrow: 1, justifyContent: "center", padding: 24 },
   logoArea: { alignItems: "center", marginBottom: 36 },
-  logoCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: "#1d5a3c", alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  logoCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#1d5a3c",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
   logoEmoji: { fontSize: 28 },
   appName: { fontSize: 26, fontWeight: "700", color: "#fff" },
   tagline: { fontSize: 14, color: "#9ca3af", marginTop: 4 },
   form: { gap: 4 },
-  label: { fontSize: 14, fontWeight: "500", color: "#d1d5db", marginTop: 12, marginBottom: 4 },
-  input: { backgroundColor: "#2a2822", borderWidth: 1, borderColor: "#3f3c35", borderRadius: 12, padding: 14, fontSize: 16, color: "#fff" },
-  btn: { backgroundColor: "#1d5a3c", borderRadius: 12, padding: 16, alignItems: "center", marginTop: 24 },
+  label: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#d1d5db",
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  input: {
+    backgroundColor: "#2a2822",
+    borderWidth: 1,
+    borderColor: "#3f3c35",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    color: "#fff",
+  },
+  btn: {
+    backgroundColor: "#1d5a3c",
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+    marginTop: 24,
+  },
   btnDisabled: { opacity: 0.6 },
   btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   linkBtn: { alignItems: "center", marginTop: 20 },
