@@ -5,13 +5,13 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "golfnmemobile",
+    "scheme": "golfnme",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1c1a15"
     },
     "ios": {
       "supportsTablet": true
@@ -19,8 +19,14 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#1d5a3c"
       },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
@@ -31,7 +37,21 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "GolfnMe uses your location to show your position on the course."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GolfnMe accesses your photos to update your profile photo.",
+          "cameraPermission": "GolfnMe uses your camera to update your profile photo."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

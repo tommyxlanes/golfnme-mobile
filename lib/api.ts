@@ -4,8 +4,8 @@ import * as SecureStore from "expo-secure-store";
 // Config — point at your Next.js backend
 // ─────────────────────────────────────────────
 export const API_BASE = __DEV__
-  ? "http://localhost:3000"          // local dev
-  : "https://app.golfnme.com";       // production (your Hetzner/Coolify server)
+  ? "http://localhost:3000" // local dev
+  : "https://app.golfnme.com"; // production (your Hetzner/Coolify server)
 
 const TOKEN_KEY = "golfnme_token";
 
@@ -33,7 +33,7 @@ interface ApiOptions extends RequestInit {
 
 export async function apiRequest<T>(
   path: string,
-  options: ApiOptions = {}
+  options: ApiOptions = {},
 ): Promise<T> {
   const { auth = true, ...fetchOptions } = options;
 
@@ -72,7 +72,10 @@ export async function apiRequest<T>(
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -108,10 +111,16 @@ export const roundsApi = {
   get: (id: string) => apiRequest<any>(`/api/rounds/${id}`),
 
   create: (body: { courseId: string; weather?: string; notes?: string }) =>
-    apiRequest<any>("/api/rounds", { method: "POST", body: JSON.stringify(body) }),
+    apiRequest<any>("/api/rounds", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   update: (id: string, body: { status?: string; notes?: string }) =>
-    apiRequest<any>(`/api/rounds/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    apiRequest<any>(`/api/rounds/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 };
 
 // Scores
@@ -124,7 +133,11 @@ export const scoresApi = {
     fairwayHit?: boolean;
     greenInReg?: boolean;
     penalties?: number;
-  }) => apiRequest<any>("/api/scores", { method: "POST", body: JSON.stringify(body) }),
+  }) =>
+    apiRequest<any>("/api/scores", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 // Courses
@@ -146,9 +159,20 @@ export const coursesApi = {
     }),
 
   create: (body: any) =>
-    apiRequest<any>("/api/courses", { method: "POST", body: JSON.stringify(body) }),
+    apiRequest<any>("/api/courses", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
-  updateHole: (courseId: string, body: { holeNumber: number; par: number; yardage?: number; handicapRank?: number }) =>
+  updateHole: (
+    courseId: string,
+    body: {
+      holeNumber: number;
+      par: number;
+      yardage?: number;
+      handicapRank?: number;
+    },
+  ) =>
     apiRequest<any>(`/api/courses/${courseId}/holes`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -167,10 +191,16 @@ export const sessionsApi = {
     apiRequest<any>(`/api/sessions?inviteCode=${inviteCode}`),
 
   create: (body: { courseId: string; maxPlayers?: number }) =>
-    apiRequest<any>("/api/sessions", { method: "POST", body: JSON.stringify(body) }),
+    apiRequest<any>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   action: (body: { sessionId: string; action: string }) =>
-    apiRequest<any>("/api/sessions", { method: "PATCH", body: JSON.stringify(body) }),
+    apiRequest<any>("/api/sessions", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   join: (inviteCode: string) =>
     apiRequest<any>("/api/sessions", {
@@ -214,5 +244,8 @@ export const friendsApi = {
 // User
 export const userApi = {
   update: (body: { name?: string; username?: string; handicap?: number }) =>
-    apiRequest<any>("/api/user", { method: "PATCH", body: JSON.stringify(body) }),
+    apiRequest<any>("/api/user", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 };
