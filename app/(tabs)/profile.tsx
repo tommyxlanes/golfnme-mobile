@@ -1,19 +1,66 @@
 import { useState } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator, ScrollView,
+  TextInput, Alert, ActivityIndicator, ScrollView, Image,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LogOut, Edit2, Check, X, User } from "lucide-react-native";
+import { LogOut, Edit2, Check, X, User, Camera, Settings } from "lucide-react-native";
 import { useAuthStore } from "@/stores/authStore";
-import { userApi } from "@/lib/api";
+import { resolveMediaUrl, userApi } from "@/lib/api";
 
 export default function ProfileTab() {
   const { user, logout, setUser } = useAuthStore();
   const qc = useQueryClient();
+  const router = useRouter();
 
   const [editing, setEditing] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarUri = resolveMediaUrl(user?.avatarUrl);
+
+  const pickAvatar = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7, // keeps the upload well under the API's 5 MB limit
+    });
+    if (result.canceled || !user) return;
+
+    setAvatarBusy(true);
+    try {
+      const res = await userApi.uploadAvatar(result.assets[0]);
+      setUser({ ...user, avatarUrl: res.avatarUrl });
+    } catch (err: any) {
+      Alert.alert("Upload failed", err.message || "Couldn't update your photo");
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    if (!user) return;
+    setAvatarBusy(true);
+    try {
+      await userApi.removeAvatar();
+      setUser({ ...user, avatarUrl: null });
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Couldn't remove your photo");
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const handleAvatarPress = () => {
+    if (!user?.avatarUrl) return pickAvatar();
+    Alert.alert("Profile photo", undefined, [
+      { text: "Choose New Photo", onPress: pickAvatar },
+      { text: "Remove Photo", style: "destructive", onPress: removeAvatar },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
   const [name, setName] = useState(user?.name ?? "");
   const [username, setUsername] = useState(user?.username ?? "");
   const [handicap, setHandicap] = useState(user?.handicap?.toString() ?? "");
@@ -43,13 +90,37 @@ export default function ProfileTab() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Avatar */}
+        <TouchableOpacity
+          style={styles.settingsBtn}
+          onPress={() => router.push("/settings" as any)}
+          accessibilityLabel="Settings"
+        >
+          <Settings color="#9ca3af" size={22} />
+        </TouchableOpacity>
+
+        {/* Avatar — tap to change */}
         <View style={styles.avatarSection}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitial}>
-              {(user?.name || user?.username || "?")[0].toUpperCase()}
-            </Text>
-          </View>
+          <TouchableOpacity
+            onPress={handleAvatarPress}
+            disabled={avatarBusy}
+            accessibilityLabel="Change profile photo"
+          >
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.avatarCircle} />
+            ) : (
+              <View style={styles.avatarCircle}>
+                <Text style={styles.avatarInitial}>
+                  {(user?.name || user?.username || "?")[0].toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <View style={styles.cameraBadge}>
+              {avatarBusy
+                ? <ActivityIndicator color="#1c1a15" size="small" />
+                : <Camera color="#1c1a15" size={15} />
+              }
+            </View>
+          </TouchableOpacity>
           {!editing && (
             <>
               <Text style={styles.displayName}>{user?.name ?? "Golfer"}</Text>
@@ -143,6 +214,8 @@ export default function ProfileTab() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#1c1a15" },
   content: { padding: 24, paddingBottom: 60 },
+  settingsBtn: { alignSelf: "flex-end", padding: 6 },
+  cameraBadge: { position: "absolute", right: -2, bottom: 12, width: 30, height: 30, borderRadius: 15, backgroundColor: "#c9a227", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#1c1a15" },
   avatarSection: { alignItems: "center", marginBottom: 24 },
   avatarCircle: { width: 90, height: 90, borderRadius: 45, backgroundColor: "#1d5a3c", alignItems: "center", justifyContent: "center", marginBottom: 14 },
   avatarInitial: { fontSize: 40, fontWeight: "700", color: "#4ade80" },

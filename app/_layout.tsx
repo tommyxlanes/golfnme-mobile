@@ -23,6 +23,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     loadSession();
   }, []);
 
+  // Cached data belongs to whoever was signed in — never show it to the
+  // next account on this phone.
+  useEffect(() => {
+    if (!isAuthenticated) queryClient.clear();
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (isLoading) return;
     const inAuthGroup = segments[0] === "(auth)";
@@ -50,6 +56,10 @@ export default function RootLayout() {
               options={{ presentation: "card" }}
             />
             <Stack.Screen
+              name="round/[id]/summary"
+              options={{ presentation: "card" }}
+            />
+            <Stack.Screen
               name="round/new"
               options={{ presentation: "modal" }}
             />
@@ -65,6 +75,9 @@ export default function RootLayout() {
               name="session/join"
               options={{ presentation: "modal" }}
             />
+            <Stack.Screen name="notifications" options={{ presentation: "card" }} />
+            <Stack.Screen name="settings" options={{ presentation: "card" }} />
+            <Stack.Screen name="friends/[id]" options={{ presentation: "card" }} />
             <Stack.Screen
               name="courses/index"
               options={{ presentation: "modal" }}

@@ -1,7 +1,9 @@
-import { API_BASE, setToken } from "@/lib/api";
+import { authApi, WEB_BASE } from "@/lib/api";
+import { completeBrowserSignIn } from "@/lib/authLink";
 import { useAuthStore } from "@/stores/authStore";
+import * as Google from "expo-auth-session/providers/google";
 import * as Linking from "expo-linking";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect, useState } from "react";
 import {
@@ -19,77 +21,165 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? API_BASE;
+// ── Google sign-in ──────────────────────────────────────────────────────
+// Native: when a Google OAuth client ID is configured for this platform,
+// sign in on the device and exchange the ID token at POST /api/auth/google.
+// The same IDs must be listed in the API's GOOGLE_CLIENT_IDS.
+//
+// Browser hand-off (fallback): open the web app's /login page, which
+// deep-links back to this app with ?token=…
+const GOOGLE_CLIENT_IDS = {
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+};
+
+const HAS_NATIVE_GOOGLE = !!Platform.select({
+  ios: GOOGLE_CLIENT_IDS.iosClientId,
+  android: GOOGLE_CLIENT_IDS.androidClientId,
+  default: GOOGLE_CLIENT_IDS.webClientId,
+});
+
+function GoogleButtonFace({ loading }: { loading: boolean }) {
+  return loading ? (
+    <ActivityIndicator color="#1c1a15" />
+  ) : (
+    <>
+      <Text style={styles.googleIcon}>G</Text>
+      <Text style={styles.googleBtnText}>Continue with Google</Text>
+    </>
+  );
+}
+
+// Rendered only when a client ID exists for this platform — the hook
+// cannot run without one.
+function NativeGoogleButton() {
+  const [loading, setLoading] = useState(false);
+  const [request, response, promptAsync] =
+    Google.useIdTokenAuthRequest(GOOGLE_CLIENT_IDS);
+
+  useEffect(() => {
+    if (!response) return;
+
+    if (response.type !== "success") {
+      setLoading(false);
+      if (response.type === "error") {
+        Alert.alert("Sign In Failed", response.error?.message ?? "Google sign in failed");
+      }
+      return;
+    }
+
+    const idToken =
+      response.params?.id_token ?? response.authentication?.idToken;
+    if (!idToken) {
+      setLoading(false);
+      Alert.alert("Sign In Failed", "Google did not return an ID token.");
+      return;
+    }
+
+    authApi
+      .google(idToken)
+      .then((data) => useAuthStore.getState().setSession(data.token, data.user))
+      .catch((err: any) =>
+        Alert.alert("Sign In Failed", err.message || "Google sign in failed"),
+      )
+      .finally(() => setLoading(false));
+  }, [response]);
+
+  return (
+    <TouchableOpacity
+      style={[styles.googleBtn, (loading || !request) && styles.btnDisabled]}
+      onPress={() => {
+        setLoading(true);
+        promptAsync().catch(() => setLoading(false));
+      }}
+      disabled={loading || !request}
+      activeOpacity={0.85}
+    >
+      <GoogleButtonFace loading={loading} />
+    </TouchableOpacity>
+  );
+}
+
+function BrowserGoogleButton() {
+  const [loading, setLoading] = useState(false);
+
+  // Where the web app sends the result: this login screen's own deep link,
+  // golfnme://login in a real build, exp://<host>/--/login inside Expo Go
+  // (which doesn't own the golfnme:// scheme).
+  const returnUrl = Linking.createURL("login");
+
+  // On Android the redirect also arrives as a deep link, which the router
+  // delivers to LoginScreen below as ?token= / ?error= params; on iOS it
+  // only comes back as the browser session's result. completeBrowserSignIn
+  // ignores the second delivery.
+  const handleAuthUrl = async (url: string) => {
+    const parsed = Linking.parse(url);
+    try {
+      await completeBrowserSignIn({
+        token: parsed.queryParams?.token as string | undefined,
+        error: parsed.queryParams?.error as string | undefined,
+      });
+    } catch (err: any) {
+      Alert.alert("Sign In Failed", err.message || "Sign in failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePress = async () => {
+    setLoading(true);
+    try {
+      // The web app signs the user in, then its /api/auth/mobile/callback
+      // redirects to returnUrl with ?token=…
+      const callbackUrl = encodeURIComponent(
+        `${WEB_BASE}/api/auth/mobile/callback?redirect=${encodeURIComponent(returnUrl)}`,
+      );
+      const result = await WebBrowser.openAuthSessionAsync(
+        `${WEB_BASE}/login?callbackUrl=${callbackUrl}`,
+        returnUrl,
+      );
+      if (result.type === "success" && result.url) {
+        await handleAuthUrl(result.url);
+      } else {
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setLoading(false);
+      Alert.alert("Error", err.message || "Google sign in failed");
+    }
+  };
+
+  return (
+    <TouchableOpacity
+      style={[styles.googleBtn, loading && styles.btnDisabled]}
+      onPress={handlePress}
+      disabled={loading}
+      activeOpacity={0.85}
+    >
+      <GoogleButtonFace loading={loading} />
+    </TouchableOpacity>
+  );
+}
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, setUser } = useAuthStore();
+  const { login } = useAuthStore();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
 
-  // ── Listen for deep link callback from NextAuth ───────────────────────
+  // Returning from the browser-based Google sign-in: the web app deep-links
+  // to this screen with ?token=… (or ?error=…). Once the session is set,
+  // the guard in app/_layout.tsx moves on to the tabs.
+  const { token, error } = useLocalSearchParams<{ token?: string; error?: string }>();
   useEffect(() => {
-    const subscription = Linking.addEventListener("url", handleDeepLink);
-    return () => subscription.remove();
-  }, []);
-
-  const handleDeepLink = async (event: { url: string }) => {
-    const { url } = event;
-    if (!url.includes("golfnme://auth")) return;
-
-    const parsed = Linking.parse(url);
-    const token = parsed.queryParams?.token as string;
-    const error = parsed.queryParams?.error as string;
-
-    if (error) {
-      setGoogleLoading(false);
-      Alert.alert("Sign In Failed", error);
-      return;
-    }
-
-    if (token) {
-      try {
-        // Fetch user info with the token
-        const res = await fetch(`${API_URL}/api/auth/mobile/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error("Failed to get user");
-
-        await setToken(token);
-        setUser(data.user);
-        router.replace("/(tabs)");
-      } catch (err: any) {
-        Alert.alert("Error", err.message || "Sign in failed");
-      } finally {
-        setGoogleLoading(false);
-      }
-    }
-  };
-
-  // ── Google Sign In via NextAuth ───────────────────────────────────────
-  const handleGoogleSignIn = async () => {
-    setGoogleLoading(true);
-    try {
-      const mobileCallbackUrl = `http://localhost:3000/api/auth/mobile/callback`;
-      const callbackUrl = encodeURIComponent(mobileCallbackUrl);
-      const fullUrl = `http://localhost:3000/login?callbackUrl=${callbackUrl}`;
-
-      const result = await WebBrowser.openAuthSessionAsync(
-        fullUrl,
-        "golfnme://auth",
-      );
-      if (result.type === "cancel" || result.type === "dismiss") {
-        setGoogleLoading(false);
-      }
-    } catch (err: any) {
-      setGoogleLoading(false);
-      Alert.alert("Error", err.message || "Google sign in failed");
-    }
-  };
+    if (!token && !error) return;
+    completeBrowserSignIn({ token, error }).catch((err: any) =>
+      Alert.alert("Sign In Failed", err.message || "Sign in failed"),
+    );
+  }, [token, error]);
 
   // ── Email/Password ────────────────────────────────────────────────────
   const handleLogin = async () => {
@@ -127,21 +217,7 @@ export default function LoginScreen() {
         </View>
 
         {/* Google */}
-        <TouchableOpacity
-          style={[styles.googleBtn, googleLoading && styles.btnDisabled]}
-          onPress={handleGoogleSignIn}
-          disabled={googleLoading}
-          activeOpacity={0.85}
-        >
-          {googleLoading ? (
-            <ActivityIndicator color="#1c1a15" />
-          ) : (
-            <>
-              <Text style={styles.googleIcon}>G</Text>
-              <Text style={styles.googleBtnText}>Continue with Google</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {HAS_NATIVE_GOOGLE ? <NativeGoogleButton /> : <BrowserGoogleButton />}
 
         {/* Divider */}
         <View style={styles.divider}>

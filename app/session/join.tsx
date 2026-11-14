@@ -35,7 +35,6 @@ export default function JoinSessionScreen() {
         <Zap color="#c9a227" size={48} style={{ alignSelf: "center", marginBottom: 24 }} />
         <Text style={styles.label}>Invite Code</Text>
         <TextInput
-          style={styles.input}
           value={code}
           onChangeText={(t) => setCode(t.toUpperCase())}
           placeholder="e.g. ABCD"

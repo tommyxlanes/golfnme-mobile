@@ -1,4 +1,5 @@
-import { API_BASE, setToken } from "@/lib/api";
+import { API_BASE } from "@/lib/api";
+import { useAuthStore } from "@/stores/authStore";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -49,7 +50,9 @@ export default function SignupScreen() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Signup failed");
 
-      await setToken(data.token);
+      // Sign in with the returned token; without this the auth guard
+      // sends the new user straight back to login.
+      await useAuthStore.getState().setSession(data.token, data.user);
       router.replace("/(tabs)");
     } catch (err: any) {
       Alert.alert("Signup Failed", err.message);
