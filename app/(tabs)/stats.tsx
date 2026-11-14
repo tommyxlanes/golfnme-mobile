@@ -4,8 +4,41 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { BarChart3, TrendingUp, Flag, Target, Plus } from "lucide-react-native";
 import { statsApi } from "@/lib/api";
+import { useState } from "react";
+import { TrendsView } from "@/components/stats/TrendsView";
+import { CoursesView } from "@/components/stats/CoursesView";
+
+const VIEWS = [
+  { id: "overview", label: "Overview" },
+  { id: "trends", label: "Trends" },
+  { id: "courses", label: "Courses" },
+] as const;
 
 export default function StatsTab() {
+  const [view, setView] = useState<(typeof VIEWS)[number]["id"]>("overview");
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <Text style={[styles.title, { paddingHorizontal: 16, paddingTop: 16 }]}>Performance</Text>
+      <View style={styles.segment}>
+        {VIEWS.map((v) => (
+          <TouchableOpacity
+            key={v.id}
+            onPress={() => setView(v.id)}
+            style={[styles.segmentBtn, view === v.id && styles.segmentBtnActive]}
+          >
+            <Text style={[styles.segmentText, view === v.id && styles.segmentTextActive]}>{v.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {view === "overview" && <OverviewStats />}
+      {view === "trends" && <TrendsView />}
+      {view === "courses" && <CoursesView />}
+    </SafeAreaView>
+  );
+}
+
+function OverviewStats() {
   const router = useRouter();
   const { data, isLoading } = useQuery({
     queryKey: ["stats"],
@@ -16,15 +49,15 @@ export default function StatsTab() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safe}>
+      <View style={{ flex: 1 }}>
         <ActivityIndicator color="#4ade80" style={{ marginTop: 80 }} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!stats || stats.totalRounds === 0) {
     return (
-      <SafeAreaView style={styles.safe}>
+      <View style={{ flex: 1 }}>
         <View style={styles.empty}>
           <BarChart3 color="#3f3c35" size={56} />
           <Text style={styles.emptyTitle}>No stats yet</Text>
@@ -34,7 +67,7 @@ export default function StatsTab() {
             <Text style={styles.emptyBtnText}>Start a Round</Text>
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -55,10 +88,8 @@ export default function StatsTab() {
   ];
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <View style={{ flex: 1 }}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Performance</Text>
-
         {/* Key stats */}
         <View style={styles.grid}>
           {[
@@ -153,11 +184,16 @@ export default function StatsTab() {
           </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  segment: { flexDirection: "row", marginHorizontal: 16, marginTop: 12, backgroundColor: "#2a2822", borderRadius: 12, padding: 4 },
+  segmentBtn: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: "center" },
+  segmentBtnActive: { backgroundColor: "#1d5a3c" },
+  segmentText: { color: "#9ca3af", fontSize: 13, fontWeight: "600" },
+  segmentTextActive: { color: "#fff" },
   safe: { flex: 1, backgroundColor: "#1c1a15" },
   content: { padding: 20, paddingBottom: 40 },
   title: { fontSize: 26, fontWeight: "700", color: "#fff", marginBottom: 20 },

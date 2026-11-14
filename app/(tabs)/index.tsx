@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Flag, Users, Plus, Zap, ChevronRight, Play, History } from "lucide-react-native";
 import { roundsApi, sessionsApi, statsApi } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
+import { NotificationBell } from "@/components/NotificationBell";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function PlayTab() {
@@ -54,9 +55,12 @@ export default function PlayTab() {
             </Text>
             <Text style={styles.subtitle}>Ready to play?</Text>
           </View>
-          <View style={styles.statPill}>
-            <Text style={styles.statNum}>{stats?.data?.totalRounds ?? 0}</Text>
-            <Text style={styles.statLbl}>rounds</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <NotificationBell />
+            <View style={styles.statPill}>
+              <Text style={styles.statNum}>{stats?.data?.totalRounds ?? 0}</Text>
+              <Text style={styles.statLbl}>rounds</Text>
+            </View>
           </View>
         </View>
 

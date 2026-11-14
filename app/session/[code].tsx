@@ -1,18 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  FlatList, TextInput, ActivityIndicator, Alert, Modal,
+  TextInput, ActivityIndicator, Alert, Modal, Share,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Trophy, Crown, Users, MessageCircle,
-  Send, X, Copy, Check, Play, ChevronRight, Minus, Plus, Flag,
+  Send, X, Share2, Play, ChevronRight, Flag, Map as MapIcon,
 } from "lucide-react-native";
-import { sessionsApi, scoresApi } from "@/lib/api";
+import { ApiError, roundsApi, sessionsApi, scoresApi } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { getAblyClient } from "@/lib/ably-rn";
+import { LiveMap } from "@/components/LiveMap";
+import { HoleScoreEntry, type HoleScore } from "@/components/HoleScoreEntry";
+import { HolePills, nextUnscoredHole } from "@/components/HolePills";
 
 export default function SessionScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
@@ -20,27 +23,46 @@ export default function SessionScreen() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
 
-  const [status, setStatus] = useState<"lobby" | "playing">("lobby");
+  const [status, setStatus] = useState<"lobby" | "playing" | "ended">("lobby");
   const [players, setPlayers] = useState<any[]>([]);
   const [myRoundId, setMyRoundId] = useState<string | null>(null);
   const [myScores, setMyScores] = useState<number[]>(Array(18).fill(0));
   const [currentHole, setCurrentHole] = useState(1);
-  const [strokes, setStrokes] = useState(4);
-  const [putts, setPutts] = useState<number | undefined>(undefined);
+  // My saved score per hole id (putts, fairway, green, penalties included)
+  const [myDetails, setMyDetails] = useState<Record<string, HoleScore>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [copied, setCopied] = useState(false);
+  // The host ended (or cancelled) the session while we had it open
+  const [endedRemotely, setEndedRemotely] = useState(false);
+  const showChatRef = useRef(false);
+  const chatScrollRef = useRef<ScrollView>(null);
   const [readyLoading, setReadyLoading] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [showMap, setShowMap] = useState(false);
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["session", code],
     queryFn: () => sessionsApi.get(code),
-    refetchInterval: status === "lobby" ? 3000 : false,
+    // Lobby: watch for players joining. Playing: a slow poll whose only
+    // job is noticing that the host ended the session (the leaderboard
+    // itself arrives over Ably).
+    refetchInterval: endedRemotely || status === "ended" ? false : status === "lobby" ? 3000 : 15000,
+    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 1,
   });
+
+  // The API stops serving a session by invite code once it has ended, so a
+  // 404 on a session we already had open means exactly that.
+  useEffect(() => {
+    if (data?.data && error instanceof ApiError && error.status === 404) {
+      setEndedRemotely(true);
+      setStatus("ended");
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+    }
+  }, [error]);
 
   const session = data?.data;
   const course = session?.course;
@@ -49,13 +71,20 @@ export default function SessionScreen() {
   const isHost = session?.hostId === user?.id;
   const myMember = session?.members?.find((m: any) => m.userId === user?.id);
   const isMeReady = !!myMember?.isReady;
+  const myRound = session?.rounds?.find((r: any) => r.userId === user?.id);
+  // Finished (or abandoned) my own round while the session is still going
+  const myRoundDone = !!myRound && myRound.status !== "IN_PROGRESS";
 
   // Load session data
   useEffect(() => {
     if (!session) return;
-    setStatus(session.status === "WAITING" ? "lobby" : "playing");
+    setStatus(
+      session.status === "WAITING" ? "lobby"
+        : session.status === "IN_PROGRESS" ? "playing"
+        : "ended", // COMPLETED or CANCELLED
+    );
 
-    if (session.status === "IN_PROGRESS" && session.rounds) {
+    if (session.status !== "WAITING" && session.rounds) {
       const myRound = session.rounds.find((r: any) => r.userId === user?.id);
       if (myRound) {
         setMyRoundId(myRound.id);
@@ -65,6 +94,17 @@ export default function SessionScreen() {
           if (h) loaded[h.holeNumber - 1] = s.strokes;
         });
         setMyScores(loaded);
+        const details: Record<string, HoleScore> = {};
+        myRound.scores?.forEach((s: any) => {
+          details[s.holeId] = {
+            strokes: s.strokes,
+            putts: s.putts ?? null,
+            fairwayHit: s.fairwayHit ?? null,
+            greenInReg: s.greenInReg ?? null,
+            penalties: s.penalties ?? 0,
+          };
+        });
+        setMyDetails(details);
         const firstUnplayed = loaded.findIndex((s) => s === 0);
         if (firstUnplayed !== -1) setCurrentHole(firstUnplayed + 1);
       }
@@ -117,19 +157,31 @@ export default function SessionScreen() {
     } catch { /* Ably optional */ }
   }, [status, session?.id]);
 
-  // Load chat
+  // Load chat history, then listen for new messages. The web app publishes
+  // each message on this channel as well as saving it, and so do we.
   useEffect(() => {
     if (!session?.id) return;
-    sessionsApi.chat(session.id).then((d) => {
-      setChatMessages(d.data ?? []);
-    });
+    sessionsApi.chat(session.id)
+      .then((d) => setChatMessages(d.data ?? []))
+      .catch(() => {});
+
+    try {
+      const channel = getAblyClient().channels.get(`session:${session.id}:chat`);
+      channel.subscribe("message", (msg: any) => {
+        const m = msg.data;
+        // Our own messages are already on screen
+        if (!m?.text || m.userId === user?.id) return;
+        setChatMessages((prev) => [...prev, { ...m, id: m.id ?? `${m.userId}-${m.timestamp ?? Date.now()}` }]);
+        if (!showChatRef.current) setUnreadCount((n) => n + 1);
+      });
+      return () => { channel.unsubscribe(); };
+    } catch { /* Ably optional — history still loads */ }
   }, [session?.id]);
 
   useEffect(() => {
-    if (!hole) return;
-    setStrokes(myScores[currentHole - 1] || hole.par || 4);
-    setPutts(undefined);
-  }, [currentHole]);
+    showChatRef.current = showChat;
+    if (showChat) setUnreadCount(0);
+  }, [showChat]);
 
   const handleReady = async () => {
     if (!session) return;
@@ -146,26 +198,141 @@ export default function SessionScreen() {
     try {
       await sessionsApi.action({ sessionId: session.id, action: "start" });
       refetch();
+    } catch (err: any) {
+      Alert.alert("Can't start yet", err.message || "Failed to start the session");
     } finally { setStartLoading(false); }
   };
 
-  const handleSaveScore = async () => {
+  const goHome = () => {
+    qc.invalidateQueries({ queryKey: ["sessions"] });
+    qc.invalidateQueries({ queryKey: ["rounds"] });
+    router.replace("/(tabs)");
+  };
+
+  // Lobby: a member leaves, or the host cancels for everyone
+  const handleLeaveOrCancel = () => {
+    if (!session) return;
+    const action = isHost ? "cancel" : "leave";
+    Alert.alert(
+      isHost ? "Cancel session?" : "Leave session?",
+      isHost
+        ? "This closes the lobby for everyone."
+        : "You can rejoin with the invite code while the lobby is open.",
+      [
+        { text: "Stay", style: "cancel" },
+        {
+          text: isHost ? "Cancel Session" : "Leave",
+          style: "destructive",
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              // cancel/leave answer 200 with { success: false, error } on failure
+              const res = await sessionsApi.action({ sessionId: session.id, action });
+              if (res?.success === false) throw new Error(res.error);
+              goHome();
+            } catch (err: any) {
+              Alert.alert("Error", err.message || "Something went wrong");
+            } finally { setActionLoading(false); }
+          },
+        },
+      ],
+    );
+  };
+
+  // Playing: finish my own round and go to its summary. Other players
+  // keep going; the host ends the session itself.
+  const handleFinishRound = () => {
+    if (!myRoundId) return;
+    const holesLeft = holes.length - played;
+    Alert.alert(
+      "Finish round?",
+      holesLeft > 0
+        ? `You still have ${holesLeft} hole${holesLeft === 1 ? "" : "s"} without a score. Your round will be saved as is.`
+        : "Your score will be final.",
+      [
+        { text: "Keep Playing", style: "cancel" },
+        {
+          text: "Finish",
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              await roundsApi.update(myRoundId, { status: "COMPLETED" });
+              qc.invalidateQueries({ queryKey: ["rounds"] });
+              qc.invalidateQueries({ queryKey: ["stats"] });
+              qc.invalidateQueries({ queryKey: ["session", code] });
+              router.replace(`/round/${myRoundId}/summary` as any);
+            } catch (err: any) {
+              Alert.alert("Error", err.message || "Failed to finish round");
+            } finally { setActionLoading(false); }
+          },
+        },
+      ],
+    );
+  };
+
+  // Playing: host closes the session for everyone
+  const handleEndSession = () => {
+    if (!session) return;
+    Alert.alert(
+      "End session?",
+      "This ends the session for all players. Anyone still playing can finish their round from History.",
+      [
+        { text: "Not Yet", style: "cancel" },
+        {
+          text: "End Session",
+          style: "destructive",
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              // The API stops serving a session by invite code once it has
+              // ended, so keep the final state it returns here instead of
+              // refetching.
+              const res = await sessionsApi.action({ sessionId: session.id, action: "end" });
+              qc.setQueryData(["session", code], res);
+              qc.invalidateQueries({ queryKey: ["sessions"] });
+            } catch (err: any) {
+              Alert.alert("Error", err.message || "Failed to end session");
+            } finally { setActionLoading(false); }
+          },
+        },
+      ],
+    );
+  };
+
+  // Par of the holes that have a score, whatever order they were played in
+  const parOfScored = (list: number[]) =>
+    holes.reduce((sum: number, h: any) => sum + (list[h.holeNumber - 1] > 0 ? h.par : 0), 0);
+
+  const handleSaveScore = async (score: HoleScore & { putts: number }) => {
     if (!hole || !myRoundId) { Alert.alert("Error", "Round not found"); return; }
     setIsSaving(true);
     try {
-      await scoresApi.save({ roundId: myRoundId, holeId: hole.id, strokes, putts, penalties: 0 });
+      await scoresApi.save({
+        roundId: myRoundId,
+        holeId: hole.id,
+        holeNumber: hole.holeNumber,
+        strokes: score.strokes,
+        putts: score.putts,
+        fairwayHit: score.fairwayHit ?? undefined,
+        greenInReg: score.greenInReg ?? undefined,
+        penalties: score.penalties,
+      });
       const updated = [...myScores];
-      updated[currentHole - 1] = strokes;
+      updated[hole.holeNumber - 1] = score.strokes;
       setMyScores(updated);
+      const details: Record<string, HoleScore> = { ...myDetails, [hole.id]: score };
+      setMyDetails(details);
       setPlayers((prev) => prev.map((p) => {
         if (p.userId !== user?.id) return p;
         const newTotal = updated.reduce((a, b) => a + (b || 0), 0);
         const played = updated.filter((s) => s > 0).length;
-        const par = holes.slice(0, played).reduce((a: number, h: any) => a + h.par, 0);
+        const par = parOfScored(updated);
         return { ...p, scores: updated, totalScore: newTotal, scoreToPar: par ? newTotal - par : 0, holesPlayed: played };
       }));
-      if (currentHole < holes.length) setCurrentHole((h) => h + 1);
-    } catch { Alert.alert("Error", "Failed to save score"); }
+      // Move on to the next hole that still needs a score
+      const next = nextUnscoredHole(holes, hole.holeNumber, (id) => !!details[id]);
+      if (next !== null) setCurrentHole(next);
+    } catch (err: any) { Alert.alert("Error", err.message || "Failed to save score"); }
     finally { setIsSaving(false); }
   };
 
@@ -173,21 +340,62 @@ export default function SessionScreen() {
     if (!chatInput.trim() || !session?.id) return;
     const text = chatInput.trim();
     setChatInput("");
-    setChatMessages((prev) => [...prev, { userId: user?.id, userName: user?.name || "You", text, id: Date.now() }]);
-    await sessionsApi.sendChat(session.id, text);
+    const message = {
+      userId: user?.id,
+      userName: user?.name || user?.username || "Player",
+      text,
+      timestamp: Date.now(),
+    };
+    const localId = `local-${message.timestamp}`;
+    setChatMessages((prev) => [...prev, { ...message, id: localId }]);
+    try {
+      await sessionsApi.sendChat(session.id, text);
+      // Saved — now deliver it live to the other players
+      getAblyClient().channels.get(`session:${session.id}:chat`).publish("message", message).catch(() => {});
+    } catch {
+      setChatMessages((prev) => prev.filter((m) => m.id !== localId));
+      setChatInput(text);
+      Alert.alert("Error", "Message not sent");
+    }
+  };
+
+  const handleShareCode = () => {
+    if (!session) return;
+    Share.share({
+      message: `Join my GolfnMe session — invite code ${session.inviteCode}`,
+    }).catch(() => {});
   };
 
   const myTotal = myScores.reduce((a, b) => a + (b || 0), 0);
   const played = myScores.filter((s) => s > 0).length;
-  const parThrough = holes.slice(0, played).reduce((a: number, h: any) => a + h.par, 0);
+  const parThrough = parOfScored(myScores);
   const myToPar = parThrough ? myTotal - parThrough : 0;
 
   if (isLoading && !session) {
     return <View style={styles.center}><ActivityIndicator color="#4ade80" size="large" /></View>;
   }
 
+  // Wrong code, or the session has already ended / been cancelled
+  if (!session) {
+    return (
+      <View style={[styles.center, { gap: 16, padding: 24 }]}>
+        <Text style={styles.doneTitle}>{(error as Error | null)?.message || "Session not found"}</Text>
+        <TouchableOpacity style={[styles.finishBtn, { paddingHorizontal: 24 }]} onPress={goHome}>
+          <Text style={styles.finishBtnText}>Back to Home</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
+      <LiveMap
+        visible={showMap}
+        onClose={() => setShowMap(false)}
+        courseLat={course?.latitude}
+        courseLng={course?.longitude}
+        courseName={course?.name}
+      />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.push("/(tabs)")} style={styles.iconBtn}>
@@ -197,6 +405,11 @@ export default function SessionScreen() {
           <Text style={styles.headerTitle} numberOfLines={1}>{course?.name ?? "Golf Session"}</Text>
           <Text style={styles.headerSub}>{session?.members?.length ?? 1} players</Text>
         </View>
+        {status === "playing" && (
+          <TouchableOpacity style={styles.chatBtn} onPress={() => setShowMap(true)} accessibilityLabel="Course map">
+            <MapIcon color="#1c1a15" size={22} />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.chatBtn} onPress={() => { setShowChat(true); setUnreadCount(0); }}>
           <MessageCircle color="#1c1a15" size={22} />
           {unreadCount > 0 && (
@@ -215,9 +428,9 @@ export default function SessionScreen() {
             <View style={styles.codeCard}>
               <Text style={styles.codeLabel}>Invite Code</Text>
               <Text style={styles.code}>{session.inviteCode}</Text>
-              <TouchableOpacity style={styles.copyBtn} onPress={() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
-                {copied ? <Check color="#4ade80" size={18} /> : <Copy color="#9ca3af" size={18} />}
-                <Text style={styles.copyText}>{copied ? "Copied!" : "Copy"}</Text>
+              <TouchableOpacity style={styles.copyBtn} onPress={handleShareCode}>
+                <Share2 color="#9ca3af" size={18} />
+                <Text style={styles.copyText}>Share</Text>
               </TouchableOpacity>
             </View>
 
@@ -261,18 +474,37 @@ export default function SessionScreen() {
                 }
               </TouchableOpacity>
             )}
+
+            <TouchableOpacity style={styles.dangerBtn} onPress={handleLeaveOrCancel} disabled={actionLoading}>
+              <Text style={styles.dangerBtnText}>{isHost ? "Cancel Session" : "Leave Session"}</Text>
+            </TouchableOpacity>
           </View>
         )}
 
-        {/* ── PLAYING ── */}
-        {status === "playing" && (
+        {/* ── PLAYING / ENDED ── */}
+        {status !== "lobby" && (
           <View style={styles.section}>
+            {status === "ended" && (
+              <View style={styles.doneCard}>
+                <Text style={styles.doneTitle}>
+                  {session?.status === "CANCELLED" ? "Session cancelled" : "Session ended"}
+                </Text>
+                <Text style={styles.doneSub}>
+                  {session?.status === "CANCELLED"
+                    ? "This session was cancelled."
+                    : endedRemotely
+                      ? "The host ended the session. Standings below are the last ones received."
+                      : "Final standings are below."}
+                </Text>
+              </View>
+            )}
+
             {/* Leaderboard */}
             <View style={styles.leaderboard}>
               <View style={styles.lbHeader}>
                 <Trophy color="#f59e0b" size={18} />
                 <Text style={styles.lbTitle}>Leaderboard</Text>
-                <Text style={styles.lbLive}>Live</Text>
+                <Text style={styles.lbLive}>{status === "ended" ? "Final" : "Live"}</Text>
               </View>
               {players.map((p, i) => (
                 <View key={p.userId} style={[styles.lbRow, p.userId === user?.id && styles.lbRowMe]}>
@@ -290,10 +522,30 @@ export default function SessionScreen() {
               ))}
             </View>
 
-            {/* Score entry */}
+            {/* Finished my round — nothing left to enter */}
+            {(status === "ended" || myRoundDone) && (
+              <>
+                {status === "playing" && (
+                  <View style={styles.doneCard}>
+                    <Text style={styles.doneTitle}>You've finished</Text>
+                    <Text style={styles.doneSub}>The leaderboard keeps updating while the others play.</Text>
+                  </View>
+                )}
+                {myRound && (
+                  <TouchableOpacity style={styles.startBtn} onPress={() => router.push(`/round/${myRound.id}/summary` as any)}>
+                    <Flag color="#1c1a15" size={18} />
+                    <Text style={styles.startBtnText}>View My Summary</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            {status === "playing" && !myRoundDone && (
+              <>
+            {/* My hole: number, par and running total */}
             <View style={styles.scoreCard}>
               <View style={styles.holeNav}>
-                <TouchableOpacity onPress={() => setCurrentHole((h) => Math.max(1, h - 1))} disabled={currentHole === 1} style={[styles.navBtn, currentHole === 1 && { opacity: 0.3 }]}>
+                <TouchableOpacity onPress={() => setCurrentHole((h) => Math.max(1, h - 1))} disabled={currentHole === 1} style={[styles.navBtn, currentHole === 1 && { opacity: 0.3 }]} accessibilityLabel="Previous hole">
                   <ChevronRight color="#fff" size={22} style={{ transform: [{ rotate: "180deg" }] }} />
                 </TouchableOpacity>
                 <View style={styles.holeNumArea}>
@@ -301,35 +553,11 @@ export default function SessionScreen() {
                   <Text style={styles.holeNum}>{currentHole}</Text>
                   <Text style={styles.holePar}>Par {hole?.par ?? 4}</Text>
                 </View>
-                <TouchableOpacity onPress={() => setCurrentHole((h) => Math.min(holes.length, h + 1))} disabled={currentHole === holes.length} style={[styles.navBtn, currentHole === holes.length && { opacity: 0.3 }]}>
+                <TouchableOpacity onPress={() => setCurrentHole((h) => Math.min(holes.length, h + 1))} disabled={currentHole === holes.length} style={[styles.navBtn, currentHole === holes.length && { opacity: 0.3 }]} accessibilityLabel="Next hole">
                   <ChevronRight color="#fff" size={22} />
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.strokeArea}>
-                <TouchableOpacity style={styles.strokeBtn} onPress={() => setStrokes((s) => Math.max(1, s - 1))}>
-                  <Minus color="#fff" size={24} />
-                </TouchableOpacity>
-                <View style={styles.strokeBubble}>
-                  <Text style={styles.strokeNum}>{strokes}</Text>
-                </View>
-                <TouchableOpacity style={styles.strokeBtn} onPress={() => setStrokes((s) => Math.min(15, s + 1))}>
-                  <Plus color="#fff" size={24} />
-                </TouchableOpacity>
-              </View>
-
-              {/* Quick buttons */}
-              <View style={styles.quickRow}>
-                {[hole?.par - 2, hole?.par - 1, hole?.par, hole?.par + 1, hole?.par + 2]
-                  .filter((s: number) => s > 0)
-                  .map((s: number) => (
-                    <TouchableOpacity key={s} onPress={() => setStrokes(s)} style={[styles.quickBtn, strokes === s && styles.quickBtnActive]}>
-                      <Text style={[styles.quickBtnText, strokes === s && { color: "#fff" }]}>{s}</Text>
-                    </TouchableOpacity>
-                  ))}
-              </View>
-
-              {/* Running total */}
               <View style={styles.runningTotal}>
                 <View style={styles.totalItem}><Text style={styles.totalLabel}>Thru</Text><Text style={styles.totalValue}>{played}</Text></View>
                 <View style={styles.totalItem}><Text style={styles.totalLabel}>Total</Text><Text style={styles.totalValue}>{myTotal || "—"}</Text></View>
@@ -340,24 +568,53 @@ export default function SessionScreen() {
                   </Text>
                 </View>
               </View>
-
-              <TouchableOpacity style={[styles.saveBtn, (isSaving || !myRoundId) && { opacity: 0.6 }]} onPress={handleSaveScore} disabled={isSaving || !myRoundId}>
-                {isSaving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveBtnText}>Save & Continue</Text>}
-              </TouchableOpacity>
             </View>
 
-            {/* Hole pills */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
-              {holes.map((h: any) => {
-                const s = myScores[h.holeNumber - 1];
-                return (
-                  <TouchableOpacity key={h.id} onPress={() => setCurrentHole(h.holeNumber)}
-                    style={[styles.pill, currentHole === h.holeNumber && styles.pillActive, s && { backgroundColor: s - h.par <= -1 ? "#16a34a" : s - h.par === 0 ? "#374151" : "#b45309" }]}>
-                    <Text style={styles.pillText}>{s || h.holeNumber}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+            {/* Hole strip — follows the current hole */}
+            <View style={{ marginHorizontal: -16 }}>
+              <HolePills
+                holes={holes}
+                currentHole={currentHole}
+                strokesFor={(id) => myDetails[id]?.strokes}
+                onSelect={setCurrentHole}
+              />
+            </View>
+
+            {/* Score entry: keyed by hole so each one starts from its own score */}
+            {hole && (
+              <View style={{ marginHorizontal: -16, marginVertical: -16 }}>
+                <HoleScoreEntry
+                  key={hole.id}
+                  hole={hole}
+                  saved={myDetails[hole.id]}
+                  saving={isSaving || !myRoundId}
+                  onSave={handleSaveScore}
+                />
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.finishBtn, (played === 0 || actionLoading || !myRoundId) && { opacity: 0.5 }]}
+              onPress={handleFinishRound}
+              disabled={played === 0 || actionLoading || !myRoundId}
+            >
+              <Flag color="#4ade80" size={18} />
+              <Text style={styles.finishBtnText}>Finish Round</Text>
+            </TouchableOpacity>
+              </>
+            )}
+
+            {status === "playing" && isHost && (
+              <TouchableOpacity style={styles.dangerBtn} onPress={handleEndSession} disabled={actionLoading}>
+                <Text style={styles.dangerBtnText}>End Session for Everyone</Text>
+              </TouchableOpacity>
+            )}
+
+            {status === "ended" && (
+              <TouchableOpacity style={styles.finishBtn} onPress={goHome}>
+                <Text style={styles.finishBtnText}>Back to Home</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </ScrollView>
@@ -371,9 +628,14 @@ export default function SessionScreen() {
               <Text style={styles.chatTitle}>Group Chat</Text>
               <TouchableOpacity onPress={() => setShowChat(false)}><X color="#9ca3af" size={22} /></TouchableOpacity>
             </View>
-            <ScrollView style={styles.chatMessages} contentContainerStyle={{ padding: 16, gap: 8 }}>
+            <ScrollView
+              ref={chatScrollRef}
+              style={styles.chatMessages}
+              contentContainerStyle={{ padding: 16, gap: 8 }}
+              onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
+            >
               {chatMessages.map((msg: any, i) => (
-                <View key={i} style={[styles.bubble, msg.userId === user?.id && styles.bubbleMe]}>
+                <View key={msg.id ?? i} style={[styles.bubble, msg.userId === user?.id && styles.bubbleMe]}>
                   <Text style={styles.bubbleUser}>{msg.userName}</Text>
                   <Text style={styles.bubbleText}>{msg.text}</Text>
                 </View>
@@ -455,6 +717,13 @@ const styles = StyleSheet.create({
   totalValue: { fontSize: 18, fontWeight: "700", color: "#fff", marginTop: 2 },
   saveBtn: { margin: 14, backgroundColor: "#c9a227", borderRadius: 12, paddingVertical: 14, alignItems: "center" },
   saveBtnText: { color: "#1c1a15", fontSize: 15, fontWeight: "700" },
+  finishBtn: { backgroundColor: "#2a2822", borderRadius: 14, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderWidth: 1.5, borderColor: "#1d5a3c" },
+  finishBtnText: { color: "#4ade80", fontWeight: "600", fontSize: 15 },
+  dangerBtn: { paddingVertical: 12, alignItems: "center" },
+  dangerBtnText: { color: "#ef4444", fontWeight: "600", fontSize: 14 },
+  doneCard: { backgroundColor: "#2a2822", borderRadius: 14, padding: 18, alignItems: "center", gap: 4 },
+  doneTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  doneSub: { fontSize: 13, color: "#9ca3af", textAlign: "center" },
   pill: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#2a2822", alignItems: "center", justifyContent: "center", marginRight: 6 },
   pillActive: { borderWidth: 2, borderColor: "#4ade80" },
   pillText: { color: "#fff", fontSize: 12, fontWeight: "600" },

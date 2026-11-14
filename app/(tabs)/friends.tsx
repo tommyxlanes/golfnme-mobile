@@ -7,9 +7,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Users, UserPlus, Search, ChevronRight, Check, X } from "lucide-react-native";
 import { friendsApi } from "@/lib/api";
+import { useRouter } from "expo-router";
 
 export default function FriendsTab() {
   const qc = useQueryClient();
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [findQuery, setFindQuery] = useState("");
   const [findDebounced, setFindDebounced] = useState("");
@@ -27,6 +29,12 @@ export default function FriendsTab() {
     refetchInterval: 15_000,
   });
 
+  // Requests I sent that haven't been answered
+  const { data: sentData } = useQuery({
+    queryKey: ["friend-sent"],
+    queryFn: () => friendsApi.sent(),
+  });
+
   const { data: searchResults } = useQuery({
     queryKey: ["user-search", findDebounced],
     queryFn: () => friendsApi.search(findDebounced),
@@ -35,6 +43,7 @@ export default function FriendsTab() {
 
   const friends = friendsData?.items ?? friendsData ?? [];
   const requests = requestsData?.items ?? requestsData ?? [];
+  const sent: any[] = Array.isArray(sentData) ? sentData : [];
 
   const filtered = useMemo(() => {
     if (!searchQuery) return friends;
@@ -64,11 +73,29 @@ export default function FriendsTab() {
   };
 
   const handleSendRequest = async (userId: string) => {
+    setActionLoading(userId);
     try {
       await friendsApi.sendRequest(userId);
-      Alert.alert("Sent!", "Friend request sent.");
-    } catch {
-      Alert.alert("Error", "Failed to send request");
+      // The search result flips to "Pending" and the request shows under Sent
+      qc.invalidateQueries({ queryKey: ["user-search"] });
+      qc.invalidateQueries({ queryKey: ["friend-sent"] });
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to send request");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleCancelRequest = async (requestId: string) => {
+    setActionLoading(requestId);
+    try {
+      await friendsApi.respond(requestId, "cancel");
+      qc.invalidateQueries({ queryKey: ["friend-sent"] });
+      qc.invalidateQueries({ queryKey: ["user-search"] });
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to cancel request");
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -109,9 +136,19 @@ export default function FriendsTab() {
                     <Text style={styles.findName}>{user.name || user.username}</Text>
                     <Text style={styles.findUser}>@{user.username}</Text>
                   </View>
-                  <TouchableOpacity style={styles.addBtn} onPress={() => handleSendRequest(user.id)}>
-                    <Text style={styles.addBtnText}>Add</Text>
-                  </TouchableOpacity>
+                  {user.isFriend ? (
+                    <Text style={styles.stateText}>Friends</Text>
+                  ) : user.hasPendingRequest ? (
+                    <Text style={styles.stateText}>Pending</Text>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.addBtn, actionLoading === user.id && { opacity: 0.6 }]}
+                      onPress={() => handleSendRequest(user.id)}
+                      disabled={actionLoading === user.id}
+                    >
+                      <Text style={styles.addBtnText}>Add</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               ))}
               {findDebounced.length >= 2 && (!searchResults?.users?.length) && (
@@ -155,6 +192,36 @@ export default function FriendsTab() {
         </View>
       )}
 
+      {/* Requests I sent */}
+      {sent.length > 0 && (
+        <View style={styles.requestsSection}>
+          <Text style={styles.sectionTitle}>Sent ({sent.length})</Text>
+          {sent.map((req: any) => (
+            <View key={req.id} style={styles.requestRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {(req.receiver?.name || req.receiver?.username || "?")[0].toUpperCase()}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.reqName}>{req.receiver?.name ?? req.receiver?.username ?? "Unknown"}</Text>
+                <Text style={styles.reqUser}>@{req.receiver?.username} · waiting</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => handleCancelRequest(req.id)}
+                disabled={actionLoading === req.id}
+                style={{ padding: 8 }}
+              >
+                {actionLoading === req.id
+                  ? <ActivityIndicator color="#9ca3af" size="small" />
+                  : <Text style={styles.cancelText}>Cancel</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* Friends search */}
       <View style={styles.searchBox2}>
         <Search color="#9ca3af" size={16} />
@@ -175,7 +242,11 @@ export default function FriendsTab() {
             keyExtractor={(f) => f.id}
             contentContainerStyle={styles.list}
             renderItem={({ item: friend }) => (
-              <View style={styles.friendRow}>
+              <TouchableOpacity
+                style={styles.friendRow}
+                onPress={() => router.push(`/friends/${friend.id}` as any)}
+                activeOpacity={0.8}
+              >
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{(friend.name || friend.username)?.[0]?.toUpperCase()}</Text>
                 </View>
@@ -189,7 +260,8 @@ export default function FriendsTab() {
                     <Text style={styles.hcpLabel}>HCP</Text>
                   </View>
                 )}
-              </View>
+                <ChevronRight color="#6b7280" size={18} />
+              </TouchableOpacity>
             )}
             ListEmptyComponent={
               !searchQuery ? (
@@ -226,6 +298,8 @@ const styles = StyleSheet.create({
   addBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   noResults: { color: "#6b7280", fontSize: 13, textAlign: "center", paddingVertical: 8 },
   requestsSection: { marginHorizontal: 20, marginBottom: 12 },
+  stateText: { color: "#9ca3af", fontSize: 13, fontWeight: "600", paddingHorizontal: 8 },
+  cancelText: { color: "#ef4444", fontSize: 13, fontWeight: "600" },
   sectionTitle: { fontSize: 13, fontWeight: "600", color: "#9ca3af", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
   requestRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#2a2210", borderRadius: 12, padding: 12, marginBottom: 6, gap: 10 },
   reqName: { fontSize: 14, fontWeight: "600", color: "#fff" },
