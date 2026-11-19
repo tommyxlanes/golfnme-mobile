@@ -43,9 +43,16 @@ export default function RoundsTab() {
   const best = scores.length ? Math.min(...scores) : null;
   const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
 
+  // Against the par of the holes actually scored, so a round that's still
+  // in progress (or was finished early) isn't measured against all 18.
   function scoreToPar(round: any) {
-    const par = round.course?.par ?? 72;
-    return round.totalScore ? round.totalScore - par : null;
+    if (!round.totalScore) return null;
+    const scored: any[] = round.scores ?? [];
+    const knowsPars = scored.length > 0 && scored.every((s) => s.hole?.par);
+    const par = knowsPars
+      ? scored.reduce((sum, s) => sum + s.hole.par, 0)
+      : round.course?.par ?? 72;
+    return round.totalScore - par;
   }
 
   function scoreColor(diff: number | null) {

@@ -32,9 +32,13 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isLoading) return;
     const inAuthGroup = segments[0] === "(auth)";
+    // On a cold start the router reports no segments at all while it shows
+    // the first screen in the stack (login), so "nowhere yet" has to count
+    // as needing a redirect for a signed-in user too.
+    const nowhereYet = (segments as string[]).length === 0;
     if (!isAuthenticated && !inAuthGroup) {
       router.replace("/(auth)/login");
-    } else if (isAuthenticated && inAuthGroup) {
+    } else if (isAuthenticated && (inAuthGroup || nowhereYet)) {
       router.replace("/(tabs)");
     }
     SplashScreen.hideAsync();
